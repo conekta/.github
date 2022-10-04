@@ -3,7 +3,6 @@
     "description": "Conekta Organization CI starter workflow.",
     "iconName": "example-icon",
     "categories": [
-        "Go",
-        "*"
+        "Python"
     ]
 }
