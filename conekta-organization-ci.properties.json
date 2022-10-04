@@ -1,0 +1,9 @@
+{
+    "name": "Conekta Organization Workflow",
+    "description": "Conekta Organization CI starter workflow.",
+    "iconName": "example-icon",
+    "categories": [
+        "Go",
+        "*"
+    ]
+}
