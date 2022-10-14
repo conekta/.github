@@ -1,0 +1,172 @@
+name: Split Docker CI Pipeline
+
+env:
+  IMAGE_TAG: ct-panel-fe:latest
+  DOCKER_FILE: Dockerfile
+  DOCKER_WORKDIR: /app
+  NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+  NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+on:
+  push:
+    branches: ["main", "develop"]
+  pull_request:
+    branches: ["main", "develop"]
+    types: ["opened", "synchronize"]
+
+jobs:
+  avoid_redundancy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cancel Previous Redundant Builds
+        uses: styfle/cancel-workflow-action@0.9.1
+        with:
+          access_token: ${{ github.token }}
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v3
+        with:
+          node-version: "14"
+          cache: "npm"
+
+      - name: Git config
+        run: git config --global url."https://".insteadOf ssh://
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run eslint-check-errors-edited
+
+  build:
+    needs: [lint]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - uses: webfactory/ssh-agent@v0.5.4
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      # Optional cache
+      # - name: Cache Docker layers
+      #   uses: actions/cache@v3
+      #   with:
+      #     path: /tmp/.buildx-cache
+      #     key: ${{ runner.os }}-buildx-${{ github.sha }}
+      #     restore-keys: |
+      #       ${{ runner.os }}-buildx-
+
+      - name: Build
+        uses: docker/build-push-action@v3
+        with:
+          context: .
+          tags: ${{ env.IMAGE_TAG }}
+          outputs: type=docker,dest=/tmp/app-image.tar
+          file: ${{ env.DOCKER_FILE }}
+          ssh: |
+            default=${{ env.SSH_AUTH_SOCK }}
+          build-args: |
+            CONEKTA_GP_USER=${{ env.CONEKTA_GP_USER }}
+            CONEKTA_GP_TOKEN=${{ env.CONEKTA_GP_TOKEN }}
+          # Optional cache
+          # cache-from: type=local,src=/tmp/.buildx-cache
+          # cache-to: type=local,dest=/tmp/.buildx-cache-new
+
+      # Optional cache
+      # - name: Move cache
+      #   run: |
+      #     rm -rf /tmp/.buildx-cache
+      #     mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: docker
+          path: /tmp/app-image.tar
+
+      # Optional lint in docker container
+      # lint:
+      #   needs: [build]
+      #   runs-on: ubuntu-latest
+      #   steps:
+      # - uses: actions/checkout@v3
+      #   with:
+      #     fetch-depth: 0
+
+      # - name: Set up Docker Buildx
+      #   uses: docker/setup-buildx-action@v2
+
+      # - name: Download artifact
+      #   uses: actions/download-artifact@v3
+      #   with:
+      #     name: docker
+      #     path: /tmp
+
+      # - name: Load image
+      #   run: |
+      #     docker load --input /tmp/app-image.tar
+
+      # - name: Lint
+      #   run: docker run ${{ env.IMAGE_TAG }} sh -c  "npm run eslint-check-errors-edited"
+
+  test:
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Download artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: docker
+          path: /tmp
+
+      - name: Load image
+        run: |
+          docker load --input /tmp/app-image.tar
+
+      - name: Test
+        run: docker run ${{ github.workspace }}/coverage:${{ env.DOCKER_WORKDIR }}/coverage ${{ env.IMAGE_TAG }} sh -c "npm test"
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: coverage
+          path: coverage/lcov.info
+
+  coverage:
+    needs: [test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v3
+        with:
+          name: coverage
+          path: coverage
+
+      - name: Publish code coverage
+        uses: paambaati/codeclimate-action@v3.0.0
+        env:
+          CC_TEST_REPORTER_ID: ${{ secrets.CC_TEST_REPORTER_ID }}
+        with:
+          coverageLocations: |
+            ${{ github.workspace }}/coverage/lcov.info:lcov

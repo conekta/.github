@@ -1,0 +1,63 @@
+name: CI Pipeline
+
+env:
+  GH_ACCESS_TOKEN: ${{ secrets.CONEKTA_GP_TOKEN }}
+  CONEKTA_GP_USER: ${{ secrets.CONEKTA_GP_USER }}
+  CONEKTA_GP_TOKEN: ${{ secrets.CONEKTA_GP_TOKEN }}
+  BUNDLE_RUBYGEMS__PKG__GITHUB__COM: ${{ secrets.CONEKTA_GP_USER }}:${{ secrets.CONEKTA_GP_TOKEN }}
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+# permissions:
+#   contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: webfactory/ssh-agent@v0.5.4
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v3
+        with:
+          submodules: recursive
+          ssh-key: ${{ env.SSH_AUTH_SOCK }}
+      # - name: Checkout submodules
+      #   run: git submodule update --init --recursive
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: 3.0.3
+          bundler-cache: true
+
+      - uses: actions/setup-node@v3
+        with:
+          node-version: "14"
+          # cache: "npm"
+
+      - name: Set credentials
+        run: bundle config https://rubygems.pkg.github.com/conekta "${{ env.CONEKTA_GP_USER }}:${{ env.CONEKTA_GP_TOKEN }}"
+
+      - name: Security audit application code
+        run: |
+          gem install brakeman
+          bundle exec brakeman . -z -q
+
+      - name: Lint Ruby files
+        run: |
+          gem install rubocop
+          bundle exec rubocop --parallel
+
+      # - name: Run tests
+      #   run: bundle exec rake
+
+      - name: Run linters
+        run: |
+          gem install reek
+          bundle exec reek app config lib
+          bundle exec rails_best_practices .
+          bundle exec rake code_analysis

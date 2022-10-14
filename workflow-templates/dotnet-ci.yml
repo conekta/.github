@@ -1,0 +1,65 @@
+name: CI Pipeline
+
+env:
+  GH_ACCESS_TOKEN: ${{ secrets.GH_ACCESS_TOKEN }}
+  CONEKTA_GP_USER: jenkins-conekta
+  CONEKTA_GP_TOKEN: ${{ secrets.GH_ACCESS_TOKEN }}
+  NUGET_AUTH_TOKEN: ${{ secrets.GH_ACCESS_TOKEN }}
+
+on:
+  push:
+    branches: ["main", "develop"]
+  pull_request:
+    branches: ["main", "develop"]
+
+jobs:
+  avoid_redundancy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cancel Previous Redundant Builds
+        uses: styfle/cancel-workflow-action@0.9.1
+        with:
+          access_token: ${{ github.token }}
+
+  ci:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: 6.0.x
+
+      - uses: webfactory/ssh-agent@v0.5.4
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Git config
+        run: git config --global url.https://$GH_ACCESS_TOKEN@github.com/.insteadOf https://github.com/
+        # run: git config --global url."ssh://git@github.com/conekta".insteadOf https://github.com/conekta
+
+      - name: Add nuget source
+        run: dotnet nuget add source --username ${{ env.CONEKTA_GP_USER }} --password ${{ env.CONEKTA_GP_TOKEN }} --store-password-in-clear-text --name github "https://nuget.pkg.github.com/conekta/index.json"
+
+      - name: Lint
+        uses: wearerequired/lint-action@v2
+        with:
+          dotnet_format: true
+
+      - name: Restore dependencies
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --no-restore
+
+      - name: Test
+        run: bash config/run-tests.sh
+
+      - name: Publish code coverage
+        uses: paambaati/codeclimate-action@v3.0.0
+        env:
+          CC_TEST_REPORTER_ID: ${{secrets.CC_TEST_REPORTER_ID}}
+        with:
+          coverageLocations: |
+            ${{github.workspace}}/coverage/*.info:lcov

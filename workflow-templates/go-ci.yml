@@ -1,0 +1,58 @@
+name: CI Pipeline
+
+env:
+  GH_ACCESS_TOKEN: ${{ secrets.GH_ACCESS_TOKEN }}
+  GOOS: linux
+  GOARCH: amd64
+
+on:
+  push:
+    branches: ["main", "develop"]
+  pull_request:
+    branches: ["main", "develop"]
+    types: ["opened", "synchronize"]
+
+jobs:
+  avoid_redundancy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cancel Previous Redundant Builds
+        uses: styfle/cancel-workflow-action@0.9.1
+        with:
+          access_token: ${{github.token}}
+
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v3
+        with:
+          go-version: 1.18
+
+      - name: Git config
+        run: git config --global url.https://$GH_ACCESS_TOKEN@github.com/.insteadOf https://github.com/
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v3
+        with:
+          args: --config golangci.yml --verbose
+          # Required: the version of golangci-lint is required and must be specified without patch version: we always use the latest patch version.
+          version: v1.45
+
+      - name: Build
+        run: go build -v ./...
+
+      - name: Test
+        run: go test -v ./... -coverprofile cover.out
+
+      - name: Publish code coverage
+        uses: paambaati/codeclimate-action@v3.0.0
+        env:
+          CC_TEST_REPORTER_ID: ${{secrets.CC_TEST_REPORTER_ID}}
+        with:
+          coverageLocations: |
+            ${{github.workspace}}/*.out

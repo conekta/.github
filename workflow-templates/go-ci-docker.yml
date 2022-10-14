@@ -1,0 +1,107 @@
+name: Docker CI Pipeline
+
+env:
+  IMAGE_TAG: risk-rules:latest
+  DOCKER_FILE: Dockerfile
+  DOCKER_TARGET_STAGE: builder
+  DOCKER_COMPOSE_FILE: docker-compose.ci.yml
+  DOCKER_WORKDIR: /go/src/risk-rules
+
+on:
+  push:
+    branches: ["main", "develop"]
+  pull_request:
+    branches: ["main", "develop"]
+    types: ["opened", "synchronize"]
+
+jobs:
+  avoid_redundancy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cancel Previous Redundant Builds
+        uses: styfle/cancel-workflow-action@0.9.1
+        with:
+          access_token: ${{github.token}}
+
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v3
+        with:
+          go-version: 1.18
+
+      - name: Git config
+        run: git config --global url.https://$GH_ACCESS_TOKEN@github.com/.insteadOf https://github.com/
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v3
+        with:
+          args: --config golangci.yml --verbose
+          # Required: the version of golangci-lint is required and must be specified without patch version: we always use the latest patch version.
+          version: v1.45
+
+      - uses: webfactory/ssh-agent@v0.5.4
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      # Optional cache
+      # - name: Cache Docker layers
+      #   uses: actions/cache@v3
+      #   with:
+      #     path: /tmp/.buildx-cache
+      #     key: ${{ runner.os }}-buildx-${{ github.sha }}
+      #     restore-keys: |
+      #       ${{ runner.os }}-buildx-
+
+      - name: Build
+        uses: docker/build-push-action@v3
+        with:
+          context: .
+          tags: ${{ env.IMAGE_TAG }}
+          target: ${{ env.DOCKER_TARGET_STAGE }}
+          load: true
+          file: ${{ env.DOCKER_FILE }}
+          ssh: |
+            default=${{ env.SSH_AUTH_SOCK }}
+          # Optional cache
+          # cache-from: type=local,src=/tmp/.buildx-cache
+          # cache-to: type=local,dest=/tmp/.buildx-cache-new
+
+      # Optional cache
+      # - name: Move cache
+      #   run: |
+      #     rm -rf /tmp/.buildx-cache
+      #     mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+
+      # Optional custom lint in docker container
+      # - name: Lint
+      #   run: docker run ${{ env.IMAGE_TAG }} sh -c  make lint-install lint
+
+      - name: Test
+        run: docker run -v ${{ github.workspace }}:${{ env.DOCKER_WORKDIR }} ${{ env.IMAGE_TAG }} sh -c "go test ./... -coverprofile cover.out -tags musl"
+
+      - name: Test integration
+        run: docker compose -f ${{ env.DOCKER_COMPOSE_FILE }} run httpserver make integration-tests
+        env:
+          DOCKER_BUILDKIT: 1
+
+      - name: Test acceptance
+        run: docker compose -f ${{ env.DOCKER_COMPOSE_FILE }} run httpserver make acceptance-tests
+        env:
+          DOCKER_BUILDKIT: 1
+
+      - name: Publish code coverage
+        uses: paambaati/codeclimate-action@v3.0.0
+        env:
+          CC_TEST_REPORTER_ID: ${{secrets.CC_TEST_REPORTER_ID}}
+        with:
+          coverageLocations: |
+            ${{github.workspace}}/*.out

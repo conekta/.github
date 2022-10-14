@@ -1,0 +1,88 @@
+name: Docker CI Pipeline
+
+env:
+  IMAGE_TAG: ct-checkout-service:latest
+  DOCKER_FILE: Dockerfile
+  DOCKER_TARGET_STAGE: builder
+  DOCKER_WORKDIR: /app
+  CONEKTA_GP_USER: jenkins-conekta
+  CONEKTA_GP_TOKEN: ${{ secrets.GH_ACCESS_TOKEN }}
+
+on:
+  push:
+    branches: ["main", "develop"]
+  pull_request:
+    branches: ["main", "develop"]
+    types: ["opened", "synchronize"]
+
+jobs:
+  avoid_redundancy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cancel Previous Redundant Builds
+        uses: styfle/cancel-workflow-action@0.9.1
+        with:
+          access_token: ${{ github.token }}
+
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - uses: webfactory/ssh-agent@v0.5.4
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      # Optional cache
+      # - name: Cache Docker layers
+      #   uses: actions/cache@v3
+      #   with:
+      #     path: /tmp/.buildx-cache
+      #     key: ${{ runner.os }}-buildx-${{ github.sha }}
+      #     restore-keys: |
+      #       ${{ runner.os }}-buildx-
+
+      - name: Build
+        uses: docker/build-push-action@v3
+        with:
+          context: .
+          tags: ${{ env.IMAGE_TAG }}
+          target: ${{ env.DOCKER_TARGET_STAGE }}
+          load: true
+          file: ${{ env.DOCKER_FILE }}
+          ssh: |
+            default=${{ env.SSH_AUTH_SOCK }}
+          build-args: |
+            CONEKTA_GP_USER=${{ env.CONEKTA_GP_USER }}
+            CONEKTA_GP_TOKEN=${{ env.CONEKTA_GP_TOKEN }}
+          # Optional cache
+          # cache-from: type=local,src=/tmp/.buildx-cache
+          # cache-to: type=local,dest=/tmp/.buildx-cache-new
+
+      # Optional cache
+      # - name: Move cache
+      #   run: |
+      #     rm -rf /tmp/.buildx-cache
+      #     mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+
+      # Optional custom lint in docker container
+      # - name: Lint
+      #   run: docker run ${{ env.IMAGE_TAG }} sh -c  make lint-install lint
+
+      - name: Test
+        run: docker run -v ${{ github.workspace }}:${{ env.DOCKER_WORKDIR }} ${{ env.IMAGE_TAG }} sh -c "bash config/run-tests.sh"
+
+      - run: ls coverage
+      - name: Publish code coverage
+        uses: paambaati/codeclimate-action@v3.0.0
+        env:
+          CC_TEST_REPORTER_ID: ${{secrets.CC_TEST_REPORTER_ID}}
+        with:
+          prefix: /app
+          coverageLocations: |
+            ${{github.workspace}}/coverage/*.info:lcov
